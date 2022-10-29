@@ -74,22 +74,21 @@ void field_end(void *field, size_t len, void *data) {
 
   memcpy(field_text, field, len);
 
-  if (s->current_column > veclast(s->skip_table) ||
-      !s->skip_table[s->current_column].valid) {
-    /* We aren't printing this column in the results... */
-    return;
-  }
+  /* Are we even printing this column at all? */
+  if (s->current_column < veclen(s->skip_table) &&
+      s->skip_table[s->current_column].valid) {
 
-  /* Find the first instance of this column in our field list */
-  size_t i = s->skip_table[s->current_column].offset;
-  s->fields[i].data = field_text;
-  s->fields[i].len = len;
-
-  /* Use same data over in duplicated columns (if exist) */
-  while (s->fields[i].skip) {
-    i += s->fields[i].skip;
+    /* Find the first instance of this column in our field list */
+    size_t i = s->skip_table[s->current_column].offset;
     s->fields[i].data = field_text;
     s->fields[i].len = len;
+
+    /* Use same data over in duplicated columns (if exist) */
+    while (s->fields[i].skip) {
+      i += s->fields[i].skip;
+      s->fields[i].data = field_text;
+      s->fields[i].len = len;
+    }
   }
 }
 
