@@ -22,7 +22,7 @@ void usage() {
   fprintf(stderr, "  csv -f test.csv -c 1,1,5-8,1 # duplicate column 1 several times\n");
 }
 
-#define BUF_SIZE (4<<10)
+#define BUF_SIZE (50)
 char buf[BUF_SIZE] = {0};
 
 typedef struct {
@@ -44,7 +44,6 @@ typedef struct {
 typedef struct {
   size_t current_column;        /* current column (zero based) */
   size_t current_row;           /* current row (zero based)*/
-  int just_header;   /* if true, we're just printing the header row */
 
   SkipLookup *skip_table; /* column index => first field entry for that column */
 
@@ -52,19 +51,33 @@ typedef struct {
   Field *fields; /* List of fields to print, in order (vector array) */
 } State;
 
+void field_end_headermode(void *field, size_t len, void *data) {
+  State* s = data;
+  if (s->current_row > 0) return; /* Only print the first row */
+  s->current_column++;
+  fprintf(stdout, "%3zu  ", s->current_column);
+  fwrite(field, sizeof(char), len, stdout);
+  fputc('\n', stdout);
+}
+
+void row_end_headermode(int c, void *data) {
+  State* s = data;
+  s->current_row++;
+}
+
+void process_header(FILE* f, State* s, struct csv_parser* p) {
+  size_t bytes_read = 0;
+  while (!feof(f) && !s->current_row) {
+    bytes_read = fread(buf, sizeof(char), BUF_SIZE, f);
+    csv_parse(p, buf, bytes_read, field_end_headermode, row_end_headermode, s);
+  }
+  csv_fini(p, field_end_headermode, row_end_headermode, s);
+}
+
 /* Called when a field is read by the csv parser */
 void field_end(void *field, size_t len, void *data) {
   State* s = (State*)data;
   s->current_column++;
-
-  if (s->just_header) {
-    if (s->current_row == 0) {
-      fprintf(stdout, "%3zu  ", s->current_column);
-      fwrite(field, sizeof(char), len, stdout);
-      fputc('\n', stdout);
-    }
-    return;
-  }
 
   /* Allocate space for the field text */
   char* field_text = aralloc(s->field_mem, len);
@@ -98,10 +111,6 @@ void row_end(int c, void *data) {
   s->current_column = 0;
   s->current_row++;
   
-  if (s->just_header) {
-    return;
-  }
-
   size_t num_fields = veclen(s->fields);
   for (size_t i=0; i<num_fields; i++) {
     if (i > 0) {
@@ -117,6 +126,15 @@ void row_end(int c, void *data) {
   fputc('\n', stdout);
 
   arreset(s->field_mem);
+}
+
+void process_file(FILE* f, State* s, struct csv_parser* p) {
+  size_t bytes_read = 0;
+  while (!feof(f)) {
+    bytes_read = fread(buf, sizeof(char), BUF_SIZE, f);
+    csv_parse(p, buf, bytes_read, field_end, row_end, s);
+  }
+  csv_fini(p, field_end, row_end, s);
 }
 
 /* Extracts column definitions from str, puts them into the fields
@@ -167,7 +185,7 @@ int parse_columns(Field** fields_ptr, char* str) {
 int main(int argc, char** argv) {
   FILE* f = NULL;
   State s = {0};
-  s.just_header = 1;
+  char just_header = 1;
   s.fields = (Field*)vecnew(sizeof(Field), 0);
 
   Arena a = {0};
@@ -183,7 +201,7 @@ int main(int argc, char** argv) {
       break;
       
     case 'c':
-      s.just_header = 0;      /* The user specified columns, so we're not in "header" mode */
+      just_header = 0; /* The user specified columns, so we're not in "header" mode */
       if (parse_columns(&s.fields, optarg)) {
 	usage();
 	exit(1);
@@ -242,16 +260,13 @@ int main(int argc, char** argv) {
     usage();
     exit(1);
   }
-  
-  size_t bytes_read = 0;
-  while (!feof(f)) {
-    bytes_read = fread(buf, sizeof(char), BUF_SIZE, f);
-    csv_parse(&p, buf, bytes_read, field_end, row_end, &s);
-    if (s.just_header && s.current_row) {
-      break;
-    }
+
+  if (just_header) {
+    process_header(f, &s, &p);
+  } else {
+    process_file(f, &s, &p);
   }
-  csv_fini(&p, field_end, row_end, &s);
+  
   csv_free(&p);
 
   arfree(&a);
