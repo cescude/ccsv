@@ -22,7 +22,7 @@ void usage() {
   fprintf(stderr, "  csv -f test.csv -c 1,1,5-8,1 # duplicate column 1 several times\n");
 }
 
-#define BUF_SIZE (50)
+#define BUF_SIZE (4<<10)
 char buf[BUF_SIZE] = {0};
 
 typedef struct {
