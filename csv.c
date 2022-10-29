@@ -35,11 +35,18 @@ typedef struct {
   size_t skip;
 } Field;
 
+typedef struct {
+  size_t offset;
+  char valid;
+} SkipLookup;
+
 /* Used to track what's going on in the csv callbacks */
 typedef struct {
   size_t current_column;        /* current column (zero based) */
   size_t current_row;           /* current row (zero based)*/
   int just_header;   /* if true, we're just printing the header row */
+
+  SkipLookup *skip_table; /* column index => first field entry for that column */
 
   Arena *field_mem;             /* Manage saved field memory */
   Field *fields; /* List of fields to print, in order (vector array) */
@@ -59,29 +66,30 @@ void field_end(void *field, size_t len, void *data) {
     return;
   }
 
-  size_t num_fields = veclen(s->fields);
-  for (size_t i=0; i<num_fields; i++) {
-    if (s->current_column == s->fields[i].column) {
-      
-      /* Allocate space for the field text */
-      s->fields[i].data = aralloc(s->field_mem, len);
-      if (!s->fields[i].data) {
-        exit(99);
-      }
+  /* Allocate space for the field text */
+  char* field_text = aralloc(s->field_mem, len);
+  if (field_text == NULL) {
+    exit(99);
+  }
 
-      /* Copy over the data */
-      memcpy(s->fields[i].data, field, len);
-      s->fields[i].len = len;
+  memcpy(field_text, field, len);
 
-      /* Use same data over in duplicated columns (if exist) */
-      Field* f = &(s->fields[i]);
-      while (s->fields[i].skip) {
-        i += s->fields[i].skip;
-        s->fields[i].data = f->data;
-        s->fields[i].len = f->len;
-      }
-      break;
-    }
+  if (s->current_column > veclast(s->skip_table) ||
+      !s->skip_table[s->current_column].valid) {
+    /* We aren't printing this column in the results... */
+    return;
+  }
+
+  /* Find the first instance of this column in our field list */
+  size_t i = s->skip_table[s->current_column].offset;
+  s->fields[i].data = field_text;
+  s->fields[i].len = len;
+
+  /* Use same data over in duplicated columns (if exist) */
+  while (s->fields[i].skip) {
+    i += s->fields[i].skip;
+    s->fields[i].data = field_text;
+    s->fields[i].len = len;
   }
 }
 
@@ -133,7 +141,7 @@ int parse_columns(Field** fields_ptr, char* str) {
       /* Add all columns in the range */
       int direction = (a < b) ? 1 : -1;
       while (1) {
-	fields = vecpush(fields);
+	fields = vecpush(fields, 1);
 	fields[veclast(fields)].column = a;
 
 	if (a==b) break;
@@ -142,7 +150,7 @@ int parse_columns(Field** fields_ptr, char* str) {
     } else if (sscanf(str, "%zu", &a) == 1) {
 
       /* Add the single column */
-      fields = vecpush(fields);
+      fields = vecpush(fields, 1);
       fields[veclast(fields)].column = a;
     } else {
       return 1;
@@ -206,6 +214,30 @@ int main(int argc, char** argv) {
     }
   }
 
+  /* Go through our fields and find the first offset for each column */
+  s.skip_table = vecnew(sizeof(SkipLookup), 0);
+  for (size_t i=0; i<num_fields; i++) {
+    size_t col = s.fields[i].column;
+
+    /* Make sure we have enough size_t's for the skip table */
+    if (veclen(s.skip_table) <= col) {
+      s.skip_table = vecpush(s.skip_table, 1 + col - veclen(s.skip_table));
+    }
+
+    if (s.skip_table == NULL) {
+      fprintf(stderr, "Allocation failure\n");
+      exit(99);
+    }
+
+    if (s.skip_table[col].valid) {
+      /* We've already recorded the first field index for this column */
+      continue;
+    }
+    
+    s.skip_table[col].valid = 1;
+    s.skip_table[col].offset = i;
+  }
+
   struct csv_parser p = {0};
   if (csv_init(&p, 0)) {
     usage();
@@ -224,6 +256,7 @@ int main(int argc, char** argv) {
   csv_free(&p);
 
   arfree(&a);
+  vecfree(s.skip_table);
   vecfree(s.fields);
   
   fclose(f);

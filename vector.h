@@ -82,11 +82,11 @@ void vecfree(void* data) {
 /* Adds a new item onto the vector, returns a pointer to the start
    (this may change if the push exceeds the capacity and a copy is
    needed) */
-void* vecpush(void* data) {
+void* vecpush(void* data, size_t count) {
   Vector* v = (Vector*)(data - sizeof(Vector));
 
-  if (v->len < v->cap) {
-    v->len++;
+  if (v->len + count <= v->cap) {
+    v->len += count;
     return data;
   }
 
@@ -101,7 +101,7 @@ void* vecpush(void* data) {
   ((Vector*)(new - sizeof(Vector)))->len = v->len;
 
   vecfree(data);
-  return vecpush(new);
+  return vecpush(new, count);
 }
 
 #endif
