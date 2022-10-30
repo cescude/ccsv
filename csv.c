@@ -30,8 +30,12 @@ typedef struct {
   char* data;            /* What is the data for this field? */
   size_t len;            /* What is the length of the data? */
 
-   /* If non-zero, that means we need to duplicate this field in the
-      output, and this is how far ahead we need to jump */
+  /* If non-zero, then we can output this field immediate without
+     storing it! */
+  char quick;
+
+  /* If non-zero, that means we need to duplicate this field in the
+     output, and this is how far ahead we need to jump */
   size_t skip;
 } Field;
 
@@ -78,64 +82,37 @@ void process_header(FILE* f, State* s, struct csv_parser* p) {
   csv_fini(p, field_end_headermode, row_end_headermode, s);
 }
 
-/* All our fields are printed in-order (w/ no duplicates), so we don't
-   need to store off any field data! */
-void field_end_quickmode(void* field, size_t len, void* data) {
-  State* s = data;
-  s->current_column++;
-
-  /* Are we even printing this column at all? */
-  if (s->current_column < veclen(s->skip_table) &&
-      s->skip_table[s->current_column].valid) {
-
-    /* Check to see if we're the first printed field... */
-    if (s->skip_table[s->current_column].offset > 0) {
-      fputc(',', stdout);
-    }
-
-    csv_fwrite(stdout, field, len);
-  }
-}
-
-void row_end_quickmode(int c, void* data) {
-  State* s = data;
-  s->current_column = 0;
-  s->current_row++;
-  fputc('\n', stdout);
-  if (s->show_progress && !(s->current_row%10000)) {
-    fprintf(stderr, "\r%zu", s->current_row - (rand()%10000));
-  }
-}
-
-void process_quickmode(FILE* f, State* s, struct csv_parser* p) {
-  char buf[BUF_SIZE] = {0};
-  size_t bytes_read = 0;
-  while (!feof(f)) {
-    bytes_read = fread(buf, sizeof(char), BUF_SIZE, f);
-    csv_parse(p, buf, bytes_read, field_end_quickmode, row_end_quickmode, s);
-  }
-  csv_fini(p, field_end_quickmode, row_end_quickmode, s);
-  if (s->show_progress) fprintf(stderr, "\r%zu Complete!\n", s->current_row);
-}
-
 void field_end_fullmode(void *field, size_t len, void *data) {
   State* s = (State*)data;
   s->current_column++;
 
-  /* Allocate space for the field text */
-  char* field_text = aralloc(s->field_mem, len);
-  if (field_text == NULL) {
-    exit(99);
-  }
-
-  memcpy(field_text, field, len);
-
   /* Are we even printing this column at all? */
   if (s->current_column < veclen(s->skip_table) &&
       s->skip_table[s->current_column].valid) {
 
-    /* Find the first instance of this column in our field list */
+    /* Lookup the first instance of this column in our field list */
     size_t i = s->skip_table[s->current_column].offset;
+    if (s->fields[i].quick) {
+      if (i > 0) {
+	fputc(',', stdout);
+      }
+      csv_fwrite(stdout, field, len);
+
+      if (!s->fields[i].skip) {
+	/* Field isn't referenced again, so we don't need to save its
+	   data! */
+	return;
+      }
+    }
+
+    /* Allocate space for the field text */
+    char* field_text = aralloc(s->field_mem, len);
+    if (field_text == NULL) {
+      exit(99);
+    }
+
+    memcpy(field_text, field, len);
+
     s->fields[i].data = field_text;
     s->fields[i].len = len;
 
@@ -155,6 +132,8 @@ void row_end_fullmode(int c, void *data) {
   
   size_t num_fields = veclen(s->fields);
   for (size_t i=0; i<num_fields; i++) {
+    if (s->fields[i].quick) continue; /* Already been printed */
+    
     if (i > 0) {
       fputc(',', stdout);
     }
@@ -307,17 +286,43 @@ int main(int argc, char** argv) {
     s.skip_table[col].offset = i;
   }
 
-  /* Go through our fields and figure out if it's a candidate for
-     quickmode... */
-  size_t cur_max = 0;
-  char ordered_no_duplicates = 1;
+  /*
+    Go through our fields and figure which can be marked as
+    "quick". "Quick" fields are ones that can be written to stdout
+    immediately upon being read. Basically, this boils down to any
+    fields that are in order from the start of the list.
+
+    Examples:
+    -c 1-10         # all can be printed out immediately
+    -c 1-10,3       # 1-10 can be printed immediately, but 3 needs to stored for printing later
+    -c 1-5,1-5      # 1-5 can be quick, but all need to be stored for the second print
+    -c 1-5,10-12    # all can be printed immediately
+    -c 1-5,20,10-12 # 1-5 and 20 can be printed immediately, 10-12 need to be printed from storage
+  */
+  size_t in_order_max = 0;
+  size_t num_quick_fields = num_fields; /* Let's be optimistic! */
   for (size_t i=0; i<num_fields; i++) {
-    if (s.fields[i].column <= cur_max) {
-      ordered_no_duplicates = 0;
+
+    /* Are we out of the initial run-up? */
+    if (s.fields[i].column <= in_order_max) {
+      num_quick_fields = i;
       break;
     }
-    cur_max = s.fields[i].column;
+    in_order_max = s.fields[i].column;
   }
+
+  /* Mark all the "quick" fields */
+  for (size_t i=0; i<num_quick_fields; i++) {
+    if (s.fields[i].column <= in_order_max) {
+      s.fields[i].quick = 1;
+    } else {
+      break;
+    }
+  }
+
+  /* for (size_t i=0; i<num_fields; i++) { */
+  /*   fprintf(stdout, "idx=%zu, col=%zu, quick=%d\n", i, s.fields[i].column, s.fields[i].quick); */
+  /* } */
 
   struct csv_parser p = {0};
   if (csv_init(&p, 0)) {
@@ -327,8 +332,6 @@ int main(int argc, char** argv) {
 
   if (just_header) {
     process_header(f, &s, &p);
-  } else if (ordered_no_duplicates) {
-    process_quickmode(f, &s, &p);
   } else {
     process_fullmode(f, &s, &p);
   }
