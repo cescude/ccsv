@@ -214,8 +214,8 @@ void process_fullmode(FILE* f, State* s, struct csv_parser* p) {
      1,2-10,1
      3-1,4-10,12-20
 */
-int parse_columns(Field** fields_ptr, char* str) {
-  Field* fields = *fields_ptr;
+int parse_columns(size_t** columns_ptr, char* str) {
+  size_t* columns = *columns_ptr;
   size_t a;
   size_t b;
 
@@ -225,8 +225,8 @@ int parse_columns(Field** fields_ptr, char* str) {
       /* Add all columns in the range */
       int direction = (a < b) ? 1 : -1;
       while (1) {
-	fields = vecpush(fields, 1);
-	fields[veclast(fields)].column = a;
+	columns = vecpush(columns, 1);
+	columns[veclast(columns)] = a;
 
 	if (a==b) break;
 	a += direction;
@@ -234,8 +234,8 @@ int parse_columns(Field** fields_ptr, char* str) {
     } else if (sscanf(str, "%zu", &a) == 1) {
 
       /* Add the single column */
-      fields = vecpush(fields, 1);
-      fields[veclast(fields)].column = a;
+      columns = vecpush(columns, 1);
+      columns[veclast(columns)] = a;
     } else {
       return 1;
     }
@@ -245,11 +245,11 @@ int parse_columns(Field** fields_ptr, char* str) {
     }
   }
 
-  *fields_ptr = fields;
+  *columns_ptr = columns;
   return 0;
 }
 
-int parse_options(Field** fields, FILE** f, char* show_progress, int argc, char** argv) {
+int parse_options(size_t** columns_ptr, FILE** f, char* show_progress, int argc, char** argv) {
   int ch;
   while ((ch = getopt(argc, argv, "hf:c:p")) != -1) {
     switch (ch) {
@@ -262,7 +262,7 @@ int parse_options(Field** fields, FILE** f, char* show_progress, int argc, char*
       break;
       
     case 'c':
-      if (parse_columns(fields, optarg)) {
+      if (parse_columns(columns_ptr, optarg)) {
 	return 1;
       }
       break;
@@ -284,8 +284,9 @@ int parse_options(Field** fields, FILE** f, char* show_progress, int argc, char*
   return 0;
 }
 
-void analyze_fields(State* s, char* easy_mode) {
-  /* Go through our fields and mark duplicates */
+void analyze_fields(State* s) {
+  
+  /* Go through our fields and mark duplicate offsets */
   size_t num_fields = veclen(s->fields);
   for (size_t i=0; i<num_fields; i++) {
     for (size_t j=i+1; j<num_fields; j++) {
@@ -297,7 +298,6 @@ void analyze_fields(State* s, char* easy_mode) {
   }
 
   /* Go through our fields and find the first offset for each column */
-  s->skip_table = vecnew(sizeof(SkipLookup), 0);
   for (size_t i=0; i<num_fields; i++) {
     size_t col = s->fields[i].column;
 
@@ -320,42 +320,15 @@ void analyze_fields(State* s, char* easy_mode) {
     s->skip_table[col].offset = i;
   }
 
-  /*
-    Go through our fields and figure which can be marked as
-    "quick". "Quick" fields are ones that can be written to stdout
-    immediately upon being read. Basically, this boils down to any
-    fields that are in order from the start of the list.
-
-    Examples:
-    -c 1-10         # all can be printed out immediately
-    -c 1-10,3       # 1-10 can be printed immediately, but 3 needs to stored for printing later
-    -c 1-5,1-5      # 1-5 can be quick, but all need to be stored for the second print
-    -c 1-5,10-12    # all can be printed immediately
-    -c 1-5,20,10-12 # 1-5 and 20 can be printed immediately, 10-12 need to be printed from storage
-  */
-  size_t in_order_max = 0;
-  size_t num_quick_fields = num_fields; /* Let's be optimistic! */
+  size_t prev_column = 0;
   for (size_t i=0; i<num_fields; i++) {
-
-    /* Are we out of the initial run-up? */
-    if (s->fields[i].column <= in_order_max) {
-      num_quick_fields = i;
+    if (s->fields[i].column <= prev_column) {
       break;
     }
-    in_order_max = s->fields[i].column;
+    prev_column = s->fields[i].column;
+    s->fields[i].quick = 1;
   }
 
-  /* Mark all the "quick" fields */
-  for (size_t i=0; i<num_quick_fields; i++) {
-    if (s->fields[i].column <= in_order_max) {
-      s->fields[i].quick = 1;
-    } else {
-      break;
-    }
-  }
-
-  *easy_mode = (num_quick_fields == num_fields);
-  
   /* for (size_t i=0; i<num_fields; i++) { */
   /*   fprintf(stdout, "idx=%zu, col=%zu, quick=%d\n", i, s->fields[i].column, s->fields[i].quick); */
   /* } */
@@ -363,21 +336,32 @@ void analyze_fields(State* s, char* easy_mode) {
 
 int main(int argc, char** argv) {
   FILE* f = NULL;
-  State s = {0};
-  s.fields = (Field*)vecnew(sizeof(Field), 0);
-
   Arena a = {0};
   arinit(&a);
-  s.field_mem = &a;
 
-  /* Parse arguments... */
-  if (parse_options(&s.fields, &f, &s.show_progress, argc, argv)) {
-    usage();
-    exit(1);
+  State s = {0};
+  s.field_mem = &a;
+  s.fields = vecnew(sizeof(Field), 0);
+  s.skip_table = vecnew(sizeof(SkipLookup), 0);
+
+  {
+    size_t* output_columns = vecnew(sizeof(size_t), 0);
+
+    /* Parse arguments... */
+    if (parse_options(&output_columns, &f, &s.show_progress, argc, argv)) {
+      usage();
+      exit(1);
+    }
+
+    vecpush(s.fields, veclen(output_columns));
+    for (size_t i=0; i<veclen(output_columns); i++) {
+      s.fields[i].column = output_columns[i];
+    }
+
+    vecfree(output_columns);
   }
 
-  char easy_mode = 0;
-  analyze_fields(&s, &easy_mode);
+  analyze_fields(&s);
 
   struct csv_parser p = {0};
   if (csv_init(&p, 0)) {
@@ -387,13 +371,13 @@ int main(int argc, char** argv) {
 
   if (veclen(s.fields) == 0) {
     process_header(f, &s, &p);
-    /* printf("Mode: Headers\n"); */
-  } else if (easy_mode) {
+    printf("Mode: Headers\n");
+  } else if (s.fields[veclast(s.fields)].quick) {
     process_easymode(f, &s, &p);
-    /* printf("Mode: Easy\n"); */
+    printf("Mode: Easy\n");
   } else {
     process_fullmode(f, &s, &p);
-    /* printf("Mode: Full\n"); */
+    printf("Mode: Full\n");
   }
 
   csv_free(&p);
