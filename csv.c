@@ -10,6 +10,7 @@ void usage() {
   fprintf(stderr, "USAGE csv [-f FILENAME] [-c 1,2,3...]\n\n");
   fprintf(stderr, "  -f FILENAME ...... filename of csv to process\n");
   fprintf(stderr, "  -c COLS .......... comma-separated list of columns to print\n");
+  fprintf(stderr, "  -p ............... display progress on stderr\n");
   fprintf(stderr, "  -h ............... display this help\n");
   fprintf(stderr, "\nNOTES\n\n");
   fprintf(stderr, "  When -f is omitted, uses STDIN.\n");
@@ -24,6 +25,7 @@ void usage() {
 
 #define BUF_SIZE (4<<10)
 char buf[BUF_SIZE] = {0};
+char show_progress = 0;
 
 typedef struct {
   size_t column;         /* Which column does this field represent? */
@@ -62,6 +64,7 @@ void field_end_headermode(void *field, size_t len, void *data) {
 
 void row_end_headermode(int c, void *data) {
   State* s = data;
+  s->current_column = 0;	/* Unnecessary, though? */
   s->current_row++;
 }
 
@@ -74,8 +77,46 @@ void process_header(FILE* f, State* s, struct csv_parser* p) {
   csv_fini(p, field_end_headermode, row_end_headermode, s);
 }
 
-/* Called when a field is read by the csv parser */
-void field_end(void *field, size_t len, void *data) {
+/* All our fields are printed in-order (w/ no duplicates), so we don't
+   need to store off any field data! */
+void field_end_quickmode(void* field, size_t len, void* data) {
+  State* s = data;
+  s->current_column++;
+
+  /* Are we even printing this column at all? */
+  if (s->current_column < veclen(s->skip_table) &&
+      s->skip_table[s->current_column].valid) {
+
+    /* Check to see if we're the first printed field... */
+    if (s->skip_table[s->current_column].offset > 0) {
+      fputc(',', stdout);
+    }
+
+    csv_fwrite(stdout, field, len);
+  }
+}
+
+void row_end_quickmode(int c, void* data) {
+  State* s = data;
+  s->current_column = 0;
+  s->current_row++;
+  fputc('\n', stdout);
+  if (show_progress && !(s->current_row%10000)) {
+    fprintf(stderr, "\r%zu", s->current_row - (rand()%10000));
+  }
+}
+
+void process_quickmode(FILE* f, State* s, struct csv_parser* p) {
+  size_t bytes_read = 0;
+  while (!feof(f)) {
+    bytes_read = fread(buf, sizeof(char), BUF_SIZE, f);
+    csv_parse(p, buf, bytes_read, field_end_quickmode, row_end_quickmode, s);
+  }
+  csv_fini(p, field_end_quickmode, row_end_quickmode, s);
+  if (show_progress) fprintf(stderr, "\r%zu Complete!\n", s->current_row);
+}
+
+void field_end_fullmode(void *field, size_t len, void *data) {
   State* s = (State*)data;
   s->current_column++;
 
@@ -105,8 +146,7 @@ void field_end(void *field, size_t len, void *data) {
   }
 }
 
-/* Called when a row is completed */
-void row_end(int c, void *data) {
+void row_end_fullmode(int c, void *data) {
   State* s = (State*)data;
   s->current_column = 0;
   s->current_row++;
@@ -126,15 +166,20 @@ void row_end(int c, void *data) {
   fputc('\n', stdout);
 
   arreset(s->field_mem);
+
+  if (show_progress && !(s->current_row%10000)) {
+    fprintf(stderr, "\r%zu", s->current_row - (rand()%10000));
+  }
 }
 
-void process_file(FILE* f, State* s, struct csv_parser* p) {
+void process_fullmode(FILE* f, State* s, struct csv_parser* p) {
   size_t bytes_read = 0;
   while (!feof(f)) {
     bytes_read = fread(buf, sizeof(char), BUF_SIZE, f);
-    csv_parse(p, buf, bytes_read, field_end, row_end, s);
+    csv_parse(p, buf, bytes_read, field_end_fullmode, row_end_fullmode, s);
   }
-  csv_fini(p, field_end, row_end, s);
+  csv_fini(p, field_end_fullmode, row_end_fullmode, s);
+  if (show_progress) fprintf(stderr, "\r%zu Complete!\n", s->current_row);
 }
 
 /* Extracts column definitions from str, puts them into the fields
@@ -194,7 +239,7 @@ int main(int argc, char** argv) {
 
   /* Parse arguments... */
   int ch;
-  while ((ch = getopt(argc, argv, "hf:c:")) != -1) {
+  while ((ch = getopt(argc, argv, "hf:c:p")) != -1) {
     switch (ch) {
     case 'f':
       f = fopen(optarg, "r");
@@ -206,6 +251,10 @@ int main(int argc, char** argv) {
 	usage();
 	exit(1);
       }
+      break;
+
+    case 'p':
+      show_progress = 1;
       break;
       
     case '?':
@@ -255,6 +304,18 @@ int main(int argc, char** argv) {
     s.skip_table[col].offset = i;
   }
 
+  /* Go through our fields and figure out if it's a candidate for
+     quickmode... */
+  size_t cur_max = 0;
+  char ordered_no_duplicates = 1;
+  for (size_t i=0; i<num_fields; i++) {
+    if (s.fields[i].column <= cur_max) {
+      ordered_no_duplicates = 0;
+      break;
+    }
+    cur_max = s.fields[i].column;
+  }
+
   struct csv_parser p = {0};
   if (csv_init(&p, 0)) {
     usage();
@@ -263,10 +324,12 @@ int main(int argc, char** argv) {
 
   if (just_header) {
     process_header(f, &s, &p);
+  } else if (ordered_no_duplicates) {
+    process_quickmode(f, &s, &p);
   } else {
-    process_file(f, &s, &p);
+    process_fullmode(f, &s, &p);
   }
-  
+
   csv_free(&p);
 
   arfree(&a);
