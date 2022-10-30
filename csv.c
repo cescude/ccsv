@@ -6,6 +6,8 @@
 #include "arena.h"
 #include "vector.h"
 
+#define BUF_SIZE (4<<10)
+
 void usage() {
   fprintf(stderr, "USAGE csv [-f FILENAME] [-c 1,2,3...]\n\n");
   fprintf(stderr, "  -f FILENAME ...... filename of csv to process\n");
@@ -22,10 +24,6 @@ void usage() {
   fprintf(stderr, "  csv -f test.csv -c 9,1-8 # put column 9 on the front\n");
   fprintf(stderr, "  csv -f test.csv -c 1,1,5-8,1 # duplicate column 1 several times\n");
 }
-
-#define BUF_SIZE (4<<10)
-char buf[BUF_SIZE] = {0};
-char show_progress = 0;
 
 typedef struct {
   size_t column;         /* Which column does this field represent? */
@@ -51,6 +49,8 @@ typedef struct {
 
   Arena *field_mem;             /* Manage saved field memory */
   Field *fields; /* List of fields to print, in order (vector array) */
+  
+  char show_progress;
 } State;
 
 void field_end_headermode(void *field, size_t len, void *data) {
@@ -69,6 +69,7 @@ void row_end_headermode(int c, void *data) {
 }
 
 void process_header(FILE* f, State* s, struct csv_parser* p) {
+  char buf[BUF_SIZE] = {0};
   size_t bytes_read = 0;
   while (!feof(f) && !s->current_row) {
     bytes_read = fread(buf, sizeof(char), BUF_SIZE, f);
@@ -101,19 +102,20 @@ void row_end_quickmode(int c, void* data) {
   s->current_column = 0;
   s->current_row++;
   fputc('\n', stdout);
-  if (show_progress && !(s->current_row%10000)) {
+  if (s->show_progress && !(s->current_row%10000)) {
     fprintf(stderr, "\r%zu", s->current_row - (rand()%10000));
   }
 }
 
 void process_quickmode(FILE* f, State* s, struct csv_parser* p) {
+  char buf[BUF_SIZE] = {0};
   size_t bytes_read = 0;
   while (!feof(f)) {
     bytes_read = fread(buf, sizeof(char), BUF_SIZE, f);
     csv_parse(p, buf, bytes_read, field_end_quickmode, row_end_quickmode, s);
   }
   csv_fini(p, field_end_quickmode, row_end_quickmode, s);
-  if (show_progress) fprintf(stderr, "\r%zu Complete!\n", s->current_row);
+  if (s->show_progress) fprintf(stderr, "\r%zu Complete!\n", s->current_row);
 }
 
 void field_end_fullmode(void *field, size_t len, void *data) {
@@ -167,19 +169,20 @@ void row_end_fullmode(int c, void *data) {
 
   arreset(s->field_mem);
 
-  if (show_progress && !(s->current_row%10000)) {
+  if (s->show_progress && !(s->current_row%10000)) {
     fprintf(stderr, "\r%zu", s->current_row - (rand()%10000));
   }
 }
 
 void process_fullmode(FILE* f, State* s, struct csv_parser* p) {
+  char buf[BUF_SIZE] = {0};
   size_t bytes_read = 0;
   while (!feof(f)) {
     bytes_read = fread(buf, sizeof(char), BUF_SIZE, f);
     csv_parse(p, buf, bytes_read, field_end_fullmode, row_end_fullmode, s);
   }
   csv_fini(p, field_end_fullmode, row_end_fullmode, s);
-  if (show_progress) fprintf(stderr, "\r%zu Complete!\n", s->current_row);
+  if (s->show_progress) fprintf(stderr, "\r%zu Complete!\n", s->current_row);
 }
 
 /* Extracts column definitions from str, puts them into the fields
@@ -254,7 +257,7 @@ int main(int argc, char** argv) {
       break;
 
     case 'p':
-      show_progress = 1;
+      s.show_progress = 1;
       break;
       
     case '?':
