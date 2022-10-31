@@ -36,6 +36,11 @@ typedef struct Vector {
   size_t cap;
 } Vector;
 
+void vecdump(FILE* fp, char* label, void* data) {
+  Vector* v = (Vector*)(data - sizeof(Vector));
+  fprintf(fp, "%s Vector=%p {sz=%zu, len=%zu, cap=%zu}\n", label, v, v->sz, v->len, v->cap);
+}
+
 /* Create a new vector, with items sized `sz` and initial capactity
    `cap`. Returns a pointer to your data (bookkeeping data is below
    the pointer). */
@@ -84,7 +89,7 @@ void vecfree(void* data) {
    needed) */
 void* vecpush(void* data, size_t count) {
   Vector* v = (Vector*)(data - sizeof(Vector));
-
+  
   if (v->len + count <= v->cap) {
     v->len += count;
     return data;
@@ -98,7 +103,9 @@ void* vecpush(void* data, size_t count) {
   }
 
   memcpy(new, data, v->sz * v->len);
-  ((Vector*)(new - sizeof(Vector)))->len = v->len;
+
+  Vector* vnew = (Vector*)(new - sizeof(Vector));
+  vnew->len = v->len;
 
   vecfree(data);
   return vecpush(new, count);

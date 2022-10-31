@@ -8,15 +8,23 @@
 
 #define BUF_SIZE (4<<10)
 
+char* field_separator = ",";
+size_t field_separator_len = 1;
+
+char show_progress = 0;
+char raw_output = 0;
+
 void usage() {
-  fprintf(stderr, "USAGE csv [-f FILENAME] [-c 1,2,3...]\n\n");
-  fprintf(stderr, "  -f FILENAME ...... filename of csv to process\n");
-  fprintf(stderr, "  -c COLS .......... comma-separated list of columns to print\n");
-  fprintf(stderr, "  -p ............... display progress on stderr\n");
-  fprintf(stderr, "  -h ............... display this help\n");
+  fprintf(stderr, "USAGE csv [OPTS]\n\n");
+  fprintf(stderr, "  -f FILENAME ... filename of csv to process\n");
+  fprintf(stderr, "  -c COLS ....... comma-separated list of columns to print\n");
+  fprintf(stderr, "  -r ............ don't quote output (\"raw\" mode)\n");
+  fprintf(stderr, "  -F SEP......... separate output columns with SEP\n");
+  fprintf(stderr, "  -p ............ display progress on stderr\n");
+  fprintf(stderr, "  -h ............ display this help\n");
   fprintf(stderr, "\nNOTES\n\n");
   fprintf(stderr, "  When -f is omitted, uses STDIN.\n");
-  fprintf(stderr, "  When -c is omitted, prints the header info\n");
+  fprintf(stderr, "  When -c is omitted, prints the header info.\n");
   fprintf(stderr, "\nEXAMPLES\n\n");
   fprintf(stderr, "  csv -f test.csv # print header list from test.csv\n");
   fprintf(stderr, "  csv -f test.csv -c 1,2,9 # print columns 1,2,9\n");
@@ -53,8 +61,6 @@ typedef struct {
 
   Arena *field_mem;             /* Manage saved field memory */
   Field *fields; /* List of fields to print, in order (vector array) */
-  
-  char show_progress;
 } State;
 
 void field_end_headermode(void *field, size_t len, void *data) {
@@ -94,10 +100,14 @@ void field_end_easymode(void* field, size_t len, void* data) {
 
     /* Check to see if we're the first printed field... */
     if (s->skip_table[s->current_column].offset > 0) {
-      fputc(',', stdout);
+      fwrite(field_separator, sizeof(char), field_separator_len, stdout);
     }
 
-    csv_fwrite(stdout, field, len);
+    if (raw_output) {
+      fwrite(field, sizeof(char), len, stdout);
+    } else {
+      csv_fwrite(stdout, field, len);
+    }
   }
 }
 
@@ -106,7 +116,7 @@ void row_end_easymode(int c, void* data) {
   s->current_column = 0;
   s->current_row++;
   fputc('\n', stdout);
-  if (s->show_progress && !(s->current_row%10000)) {
+  if (show_progress && !(s->current_row%10000)) {
     fprintf(stderr, "\r%zu", s->current_row - (rand()%10000));
   }
 }
@@ -119,7 +129,7 @@ void process_easymode(FILE* f, State* s, struct csv_parser* p) {
     csv_parse(p, buf, bytes_read, field_end_easymode, row_end_easymode, s);
   }
   csv_fini(p, field_end_easymode, row_end_easymode, s);
-  if (s->show_progress) fprintf(stderr, "\r%zu Complete!\n", s->current_row);
+  if (show_progress) fprintf(stderr, "\r%zu Complete!\n", s->current_row);
 }
 
 void field_end_fullmode(void *field, size_t len, void *data) {
@@ -134,9 +144,14 @@ void field_end_fullmode(void *field, size_t len, void *data) {
     size_t i = s->skip_table[s->current_column].offset;
     if (s->fields[i].quick) {
       if (i > 0) {
-	fputc(',', stdout);
+	fwrite(field_separator, sizeof(char), field_separator_len, stdout);
       }
-      csv_fwrite(stdout, field, len);
+
+      if (raw_output) {
+	fwrite(field, sizeof(char), len, stdout);
+      } else {
+	csv_fwrite(stdout, field, len);
+      }
 
       if (!s->fields[i].skip) {
 	/* Field isn't referenced again, so we don't need to save its
@@ -175,9 +190,14 @@ void row_end_fullmode(int c, void *data) {
     if (s->fields[i].quick) continue; /* Already been printed */
     
     if (i > 0) {
-      fputc(',', stdout);
+      fwrite(field_separator, sizeof(char), field_separator_len, stdout);
     }
-    csv_fwrite(stdout, s->fields[i].data, s->fields[i].len);
+    
+    if (raw_output) {
+      fwrite(s->fields[i].data, sizeof(char), s->fields[i].len, stdout);
+    } else {
+      csv_fwrite(stdout, s->fields[i].data, s->fields[i].len);
+    }
 
     /* Clear these out, on the off-chance the next row doesn't have full data */
     s->fields[i].data = NULL;
@@ -188,7 +208,7 @@ void row_end_fullmode(int c, void *data) {
 
   arreset(s->field_mem);
 
-  if (s->show_progress && !(s->current_row%10000)) {
+  if (show_progress && !(s->current_row%10000)) {
     fprintf(stderr, "\r%zu", s->current_row - (rand()%10000));
   }
 }
@@ -201,7 +221,7 @@ void process_fullmode(FILE* f, State* s, struct csv_parser* p) {
     csv_parse(p, buf, bytes_read, field_end_fullmode, row_end_fullmode, s);
   }
   csv_fini(p, field_end_fullmode, row_end_fullmode, s);
-  if (s->show_progress) fprintf(stderr, "\r%zu Complete!\n", s->current_row);
+  if (show_progress) fprintf(stderr, "\r%zu Complete!\n", s->current_row);
 }
 
 /* Extracts column definitions from str, puts them into the fields
@@ -240,7 +260,7 @@ int parse_columns(size_t** columns_ptr, char* str) {
       return 1;
     }
 
-    if (str = strchr(str, ',')) {
+  if (str = strchr(str, ',')) {
       str++; 			/* skip the comma */
     }
   }
@@ -249,9 +269,9 @@ int parse_columns(size_t** columns_ptr, char* str) {
   return 0;
 }
 
-int parse_options(size_t** columns_ptr, FILE** f, char* show_progress, int argc, char** argv) {
+int parse_options(size_t** columns_ptr, FILE** f, int argc, char** argv) {
   int ch;
-  while ((ch = getopt(argc, argv, "hf:c:p")) != -1) {
+  while ((ch = getopt(argc, argv, "hf:c:pF:r")) != -1) {
     switch (ch) {
     case 'f':
       if (*f) {
@@ -268,7 +288,16 @@ int parse_options(size_t** columns_ptr, FILE** f, char* show_progress, int argc,
       break;
 
     case 'p':
-      *show_progress = 1;
+      show_progress = 1;
+      break;
+
+    case 'F':
+      field_separator = optarg;
+      field_separator_len = strlen(optarg);
+      break;
+
+    case 'r':
+      raw_output = 1;
       break;
       
     case '?':
@@ -285,7 +314,7 @@ int parse_options(size_t** columns_ptr, FILE** f, char* show_progress, int argc,
 }
 
 void analyze_fields(State* s) {
-  
+
   /* Go through our fields and mark duplicate offsets */
   size_t num_fields = veclen(s->fields);
   for (size_t i=0; i<num_fields; i++) {
@@ -341,19 +370,19 @@ int main(int argc, char** argv) {
 
   State s = {0};
   s.field_mem = &a;
-  s.fields = vecnew(sizeof(Field), 0);
-  s.skip_table = vecnew(sizeof(SkipLookup), 0);
+  s.fields = (Field*)vecnew(sizeof(Field), 0);
+  s.skip_table = (SkipLookup*)vecnew(sizeof(SkipLookup), 0);
 
   {
-    size_t* output_columns = vecnew(sizeof(size_t), 0);
+    size_t* output_columns = (size_t*)vecnew(sizeof(size_t), 0);
 
     /* Parse arguments... */
-    if (parse_options(&output_columns, &f, &s.show_progress, argc, argv)) {
+    if (parse_options(&output_columns, &f, argc, argv)) {
       usage();
       exit(1);
     }
-
-    vecpush(s.fields, veclen(output_columns));
+    
+    s.fields = vecpush(s.fields, veclen(output_columns));
     for (size_t i=0; i<veclen(output_columns); i++) {
       s.fields[i].column = output_columns[i];
     }
@@ -371,13 +400,13 @@ int main(int argc, char** argv) {
 
   if (veclen(s.fields) == 0) {
     process_header(f, &s, &p);
-    printf("Mode: Headers\n");
+    /* printf("Mode: Headers\n"); */
   } else if (s.fields[veclast(s.fields)].quick) {
     process_easymode(f, &s, &p);
-    printf("Mode: Easy\n");
+    /* printf("Mode: Easy\n"); */
   } else {
     process_fullmode(f, &s, &p);
-    printf("Mode: Full\n");
+    /* printf("Mode: Full\n"); */
   }
 
   csv_free(&p);
