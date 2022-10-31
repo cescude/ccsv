@@ -34,17 +34,17 @@ void usage() {
 }
 
 typedef struct {
-  size_t column;         /* Which column does this field represent? */
+  size_t column;         /* Which input column does this field represent? */
   char* data;            /* What is the data for this field? */
   size_t len;            /* What is the length of the data? */
 
-  /* If non-zero, then we can output this field immediate without
+  /* If non-zero, then we can output this field immediately without
      storing it! */
   char quick;
 
-  /* If non-zero, that means we need to duplicate this field in the
-     output, and this is how far ahead we need to jump */
-  size_t skip;
+  /* If non-zero, that means this column is duplicated in the output
+     (and next_idx is where it occurs) */
+  size_t next_idx;
 } Field;
 
 typedef struct {
@@ -57,7 +57,10 @@ typedef struct {
   size_t current_column;        /* current column (zero based) */
   size_t current_row;           /* current row (zero based)*/
 
-  SkipLookup *skip_table; /* column index => first field entry for that column */
+   /* input column => first field index for that column. Subsequent
+      fields representing this column can be found with
+      Field.next_idx */
+  SkipLookup *skip_table;
 
   Arena *field_mem;             /* Manage saved field memory */
   Field *fields; /* List of fields to print, in order (vector array) */
@@ -153,7 +156,7 @@ void field_end_fullmode(void *field, size_t len, void *data) {
 	csv_fwrite(stdout, field, len);
       }
 
-      if (!s->fields[i].skip) {
+      if (!s->fields[i].next_idx) {
 	/* Field isn't referenced again, so we don't need to save its
 	   data! */
 	return;
@@ -172,8 +175,8 @@ void field_end_fullmode(void *field, size_t len, void *data) {
     s->fields[i].len = len;
 
     /* Use same data over in duplicated columns (if exist) */
-    while (s->fields[i].skip) {
-      i += s->fields[i].skip;
+    while (s->fields[i].next_idx) {
+      i = s->fields[i].next_idx;
       s->fields[i].data = field_text;
       s->fields[i].len = len;
     }
@@ -320,7 +323,7 @@ void analyze_fields(State* s) {
   for (size_t i=0; i<num_fields; i++) {
     for (size_t j=i+1; j<num_fields; j++) {
       if (s->fields[i].column == s->fields[j].column) {
-        s->fields[i].skip = j-i; /* i + skip => duplicate column */
+        s->fields[i].next_idx = j;
         break;
       }
     }
