@@ -263,7 +263,7 @@ int parse_columns(size_t** columns_ptr, char* str) {
       return 1;
     }
 
-  if (str = strchr(str, ',')) {
+    if ((str = strchr(str, ',')) != NULL) {
       str++; 			/* skip the comma */
     }
   }
