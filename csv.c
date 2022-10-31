@@ -19,12 +19,14 @@ void usage() {
   fprintf(stderr, "  -f FILENAME ... filename of csv to process\n");
   fprintf(stderr, "  -c COLS ....... comma-separated list of columns to print\n");
   fprintf(stderr, "  -r ............ don't quote output (\"raw\" mode)\n");
+  fprintf(stderr, "  -I DELIM ...... use DELIM as input field separator\n");
   fprintf(stderr, "  -F SEP......... separate output columns with SEP\n");
   fprintf(stderr, "  -p ............ display progress on stderr\n");
   fprintf(stderr, "  -h ............ display this help\n");
   fprintf(stderr, "\nNOTES\n\n");
-  fprintf(stderr, "  When -f is omitted, uses STDIN.\n");
-  fprintf(stderr, "  When -c is omitted, prints the header info.\n");
+  fprintf(stderr, "  * When -f is omitted, uses STDIN\n");
+  fprintf(stderr, "  * When -c is omitted, prints the header info\n");
+  fprintf(stderr, "  * DELIM must be a single character, but SEP may be a string\n");
   fprintf(stderr, "\nEXAMPLES\n\n");
   fprintf(stderr, "  csv -f test.csv # print header list from test.csv\n");
   fprintf(stderr, "  csv -f test.csv -c 1,2,9 # print columns 1,2,9\n");
@@ -34,9 +36,9 @@ void usage() {
 }
 
 typedef struct {
-  size_t column;         /* Which input column does this field represent? */
-  char* data;            /* What is the data for this field? */
-  size_t len;            /* What is the length of the data? */
+  size_t column;   /* Which input column does this field represent? */
+  char* data;      /* What is the data for this field? */
+  size_t len;      /* What is the length of the data? */
 
   /* If non-zero, then we can output this field immediately without
      storing it! */
@@ -54,7 +56,7 @@ typedef struct {
 
 /* Used to track what's going on in the csv callbacks */
 typedef struct {
-  size_t current_column;        /* current column (zero based) */
+  size_t current_column;        /* current input column (one based) */
   size_t current_row;           /* current row (zero based)*/
 
    /* input column => first field index for that column. Subsequent
@@ -272,9 +274,9 @@ int parse_columns(size_t** columns_ptr, char* str) {
   return 0;
 }
 
-int parse_options(size_t** columns_ptr, FILE** f, int argc, char** argv) {
+int parse_options(size_t** columns_ptr, FILE** f, char* delim, int argc, char** argv) {
   int ch;
-  while ((ch = getopt(argc, argv, "hf:c:pF:r")) != -1) {
+  while ((ch = getopt(argc, argv, "hf:c:pI:F:r")) != -1) {
     switch (ch) {
     case 'f':
       if (*f) {
@@ -292,6 +294,13 @@ int parse_options(size_t** columns_ptr, FILE** f, int argc, char** argv) {
 
     case 'p':
       show_progress = 1;
+      break;
+
+    case 'I':
+      if (strlen(optarg) > 1) {
+        return 1;
+      }
+      *delim = optarg[0];
       break;
 
     case 'F':
@@ -368,6 +377,7 @@ void analyze_fields(State* s) {
 
 int main(int argc, char** argv) {
   FILE* f = NULL;
+  char delim = ',';
   Arena a = {0};
   arinit(&a);
 
@@ -380,11 +390,11 @@ int main(int argc, char** argv) {
     size_t* output_columns = (size_t*)vecnew(sizeof(size_t), 0);
 
     /* Parse arguments... */
-    if (parse_options(&output_columns, &f, argc, argv)) {
+    if (parse_options(&output_columns, &f, &delim, argc, argv)) {
       usage();
       exit(1);
     }
-    
+
     s.fields = vecpush(s.fields, veclen(output_columns));
     for (size_t i=0; i<veclen(output_columns); i++) {
       s.fields[i].column = output_columns[i];
@@ -400,6 +410,8 @@ int main(int argc, char** argv) {
     usage();
     exit(1);
   }
+
+  csv_set_delim(&p, delim);
 
   if (veclen(s.fields) == 0) {
     process_header(f, &s, &p);

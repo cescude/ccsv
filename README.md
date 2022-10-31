@@ -84,14 +84,16 @@ Run make to build.
       -f FILENAME ... filename of csv to process
       -c COLS ....... comma-separated list of columns to print
       -r ............ don't quote output ("raw" mode)
+      -I DELIM ...... use DELIM as input field separator
       -F SEP......... separate output columns with SEP
       -p ............ display progress on stderr
       -h ............ display this help
 
     NOTES
 
-      When -f is omitted, uses STDIN.
-      When -c is omitted, prints the header info.
+      * When -f is omitted, uses STDIN
+      * When -c is omitted, prints the header info
+      * DELIM must be a single character, but SEP may be a string
 
     EXAMPLES
 
