@@ -37,18 +37,44 @@ void ws(char* str, size_t len, char raw) {
   if (!str || !len) return;
 
   if (raw) {
-    if (write_buffer_len + len >= OBUF_SIZE) {
+    if (write_buffer_len + len <= OBUF_SIZE) {
+      /* We have room in the output buffer for this particular string... */
+      memcpy(write_buffer + write_buffer_len, str, len);
+      write_buffer_len += len;
+    } else {
       fb();
+
+      if (len <= OBUF_SIZE) {
+        /* OK, after clearing the output buffer, we now have room */
+        memcpy(write_buffer, str, len);
+        write_buffer_len = len;
+      } else {
+        /* Our output buffer is empty AND isn't large enough to hold
+           str, so write directly to stdout and move on! */
+        fwrite(str, sizeof(char), len, stdout);
+      }
     }
-    memcpy(write_buffer + write_buffer_len, str, len);
-    write_buffer_len += len;
   } else {
-    size_t ql = csv_write(NULL, OBUF_SIZE - write_buffer_len, str, len);
-    if (write_buffer_len + ql >= OBUF_SIZE) {
-      fb();
+    while (1) {
+      size_t written = csv_write(write_buffer + write_buffer_len, OBUF_SIZE - write_buffer_len, str, len);
+      if (write_buffer_len + written < OBUF_SIZE) {
+        /* Great! The whole thing was able to fit in our output
+           buffer! */
+        write_buffer_len += written;
+        break;
+      } else if (write_buffer_len) {
+        /* Flush the output buffer & try again... */
+        fb();
+      } else {
+        /* Our output buffer is empty, but *still* we don't have
+           enough room to fit this field :^(
+
+           Since our output buffer is empty, why don't we just write
+           this data directly to stdout and move on? */
+        csv_fwrite(stdout, str, len);
+        break;
+      }
     }
-    csv_write(write_buffer + write_buffer_len, OBUF_SIZE - write_buffer_len, str, len);
-    write_buffer_len += ql;
   }
 }
 
@@ -159,13 +185,15 @@ void field_end_easymode(void* field, size_t len, void* data) {
   }
 }
 
+#define PROG_CONST (1<<13)
 void row_end_easymode(int c, void* data) {
   State* s = data;
   s->current_column = 0;
   s->current_row++;
   wc('\n');
-  if (show_progress && !(s->current_row%10000)) {
-    fprintf(stderr, "\r%zu", s->current_row - (rand()%10000));
+  if (show_progress && (s->current_row & PROG_CONST)) {
+    fprintf(stderr, "\r%zu", s->current_row - (rand()&(PROG_CONST-1)));
+    fflush(stderr);
   }
 }
 
@@ -419,10 +447,13 @@ int main(int argc, char** argv) {
   Arena a = {0};
   arinit(&a);
 
-  State s = {0};
-  s.field_mem = &a;
-  s.fields = (Field*)vecnew(sizeof(Field), 0);
-  s.skip_table = (SkipLookup*)vecnew(sizeof(SkipLookup), 0);
+  State s = {
+    .current_column = 0,
+    .current_row = 0,
+    .field_mem = &a,
+    .fields = vecnew(sizeof(Field), 0),
+    .skip_table = vecnew(sizeof(SkipLookup), 0),
+  };
 
   {
     size_t* output_columns = (size_t*)vecnew(sizeof(size_t), 0);

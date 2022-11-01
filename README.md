@@ -102,3 +102,51 @@ Run make to build.
       csv -f test.csv -c 1,5-9 # print columns 1, and 5 through 9
       csv -f test.csv -c 9,1-8 # put column 9 on the front
       csv -f test.csv -c 1,1,5-8,1 # duplicate column 1 several times
+
+# Performance Notes
+
+Take from this what you will! How large is our input file?
+
+    $ du -h ~/Downloads/aggregated.csv
+     21G    /Users/chandler.escude/Downloads/aggregated.csv
+
+How long does it take to `cat` this file?
+
+    $ time cat ~/Downloads/aggregated.csv > /dev/null
+
+    real    0m3.771s
+    user    0m0.074s
+    sys     0m2.917s
+
+What's the best case performance of processing the file (just a single
+column being output means minimal writing, also there's no
+out-of-order columns so we don't need to save any data in memory for
+reference later)?
+
+    $ time ./csv -f ~/Downloads/aggregated.csv -c1 -p > /dev/null
+    22756334 Complete!
+
+    real    1m34.570s
+    user    1m28.852s
+    sys     0m4.415s
+
+Outputting in "easy" mode (all columns ascending), how long does `csv`
+take to process the file?
+
+    $ time ./csv -f ~/Downloads/aggregated.csv -c1-708 -p > /dev/null
+    22756334 Complete!
+
+    real    2m23.736s
+    user    2m18.093s
+    sys     0m4.822s
+
+Outputting in "full" mode (column data must be saved to memory due to
+output columns being written out-of-order), how long does `csv` take
+to process the file?
+
+   $ time ./csv -f ~/Downloads/aggregated.csv -c708-1 -p > /dev/null
+   22756334 Complete!
+
+   real    3m44.462s
+   user    3m37.892s
+   sys     0m5.700s
