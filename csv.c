@@ -253,15 +253,12 @@ void field_end_fullmode(void *field, size_t len, void *data) {
 
     memcpy(field_text, field, len);
 
-    s->fields[i].data = field_text;
-    s->fields[i].len = len;
-
-    /* Use same data over in duplicated columns (if exist) */
-    while (s->fields[i].next_idx) {
-      i = s->fields[i].next_idx;
+    /* Reference field text into any/all output fields */
+    do {
       s->fields[i].data = field_text;
       s->fields[i].len = len;
-    }
+      i = s->fields[i].next_idx; /* Look for duplicated columns */
+    } while (i);
   }
 }
 
