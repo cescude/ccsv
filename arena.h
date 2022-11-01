@@ -36,6 +36,19 @@ Region* regnew(size_t bytes_needed) {
   return r;
 }
 
+void* regalloc(Region* region, size_t bytes_needed) {
+  if (bytes_needed <= (region->sz-region->offset)) {
+    void *ptr = (void*)region + sizeof(Region) + region->offset;
+    region->offset += bytes_needed;
+    return ptr;
+  }
+  return NULL;
+}
+
+void regreset(Region* region) {
+  region->offset = 0;
+}
+
 void arinit(Arena* a) {
   a->regions = regnew(0);
 }
@@ -93,7 +106,7 @@ void* aralloc_raw(Arena* arena, size_t sz) {
     arena->regions = region;
   }
 
-  void* ptr = region + sizeof(Region) + region->offset;
+  void* ptr = (void*)region + sizeof(Region) + region->offset;
   region->offset += sz;
 
   return ptr;
