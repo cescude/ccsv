@@ -3,6 +3,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <csv.h>
+#include <time.h>
 #include "arena.h"
 #include "vector.h"
 
@@ -21,14 +22,15 @@ size_t write_buffer_len = 0;
 /* flush buffer */
 void fb() {
   char* p = write_buffer;
-  while (write_buffer_len) {
-    size_t c = fwrite(p, sizeof(char), write_buffer_len, stdout);
-    if (c) {
-      p += c;
-      write_buffer_len -= c;
-    } else {
-      exit(99);
-    }
+  size_t written;
+  do {
+    written = fwrite(p, sizeof(char), write_buffer_len, stdout);
+    write_buffer_len -= written;
+    p += written;
+  } while (write_buffer_len && written);
+
+  if (!written) {
+    exit(99);                   /* Error, or something */
   }
 }
 
@@ -51,7 +53,16 @@ void ws(char* str, size_t len, char raw) {
       } else {
         /* Our output buffer is empty AND isn't large enough to hold
            str, so write directly to stdout and move on! */
-        fwrite(str, sizeof(char), len, stdout);
+        size_t written;
+        do {
+          written = fwrite(str, sizeof(char), len, stdout);
+          len -= written;
+          str += written;
+        } while (len && written);
+
+        if (!written) {
+          exit(99);             /* Error, or something */
+        }
       }
     }
   } else {
@@ -185,14 +196,14 @@ void field_end_easymode(void* field, size_t len, void* data) {
   }
 }
 
-#define PROG_CONST (1<<13)
+#define PROG_CONST (1000)
 void row_end_easymode(int c, void* data) {
   State* s = data;
   s->current_column = 0;
   s->current_row++;
   wc('\n');
-  if (show_progress && (s->current_row & PROG_CONST)) {
-    fprintf(stderr, "\r%zu", s->current_row - (rand()&(PROG_CONST-1)));
+  if (show_progress && !(s->current_row % PROG_CONST)) {
+    fprintf(stderr, "\r%zu", s->current_row - (rand()%PROG_CONST));
     fflush(stderr);
   }
 }
@@ -230,7 +241,7 @@ void field_end_fullmode(void *field, size_t len, void *data) {
       if (!s->fields[i].next_idx) {
 	/* Field isn't referenced again, so we don't need to save its
 	   data! */
-	return;
+        return;
       }
     }
 
@@ -500,5 +511,6 @@ int main(int argc, char** argv) {
   vecfree(s.fields);
   
   fclose(f);
+
   return 0;
 }
