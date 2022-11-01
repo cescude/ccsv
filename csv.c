@@ -14,6 +14,41 @@ size_t field_separator_len = 1;
 char show_progress = 0;
 char raw_output = 0;
 
+#define OBUF_SIZE (4<<20)
+char write_buffer[OBUF_SIZE] = {0};
+size_t write_buffer_len = 0;
+
+void fb() {
+  char* p = write_buffer;
+  while (write_buffer_len) {
+    size_t c = fwrite(p, sizeof(char), write_buffer_len, stdout);
+    if (c) {
+      p += c;
+      write_buffer_len -= c;
+    } else {
+      exit(99);
+    }
+  }
+}
+
+void ws(char* str, size_t len) {
+  if (!str || !len) return;
+  if (write_buffer_len + len >= OBUF_SIZE) {
+    fb();
+  }
+
+  memcpy(write_buffer + write_buffer_len, str, len);
+  write_buffer_len += len;
+}
+
+void wc(char c) {
+  if (write_buffer_len + 1 >= OBUF_SIZE) {
+    fb();
+  }
+
+  write_buffer[write_buffer_len++] = c;
+}
+
 void usage() {
   fprintf(stderr, "USAGE csv [OPTS]\n\n");
   fprintf(stderr, "  -f FILENAME ... filename of csv to process\n");
@@ -105,11 +140,16 @@ void field_end_easymode(void* field, size_t len, void* data) {
 
     /* Check to see if we're the first printed field... */
     if (s->skip_table[s->current_column].offset > 0) {
-      fwrite(field_separator, sizeof(char), field_separator_len, stdout);
+      if (raw_output) {
+	ws(field_separator, field_separator_len);
+      } else {
+	fwrite(field_separator, sizeof(char), field_separator_len, stdout);
+      }
     }
 
     if (raw_output) {
-      fwrite(field, sizeof(char), len, stdout);
+      ws(field, len);
+      /* fwrite(field, sizeof(char), len, stdout); */
     } else {
       csv_fwrite(stdout, field, len);
     }
@@ -120,7 +160,11 @@ void row_end_easymode(int c, void* data) {
   State* s = data;
   s->current_column = 0;
   s->current_row++;
-  fputc('\n', stdout);
+  if (raw_output) {
+    wc('\n');
+  } else {
+    fputc('\n', stdout);
+  }
   if (show_progress && !(s->current_row%10000)) {
     fprintf(stderr, "\r%zu", s->current_row - (rand()%10000));
   }
@@ -135,6 +179,10 @@ void process_easymode(FILE* f, State* s, struct csv_parser* p) {
   }
   csv_fini(p, field_end_easymode, row_end_easymode, s);
   if (show_progress) fprintf(stderr, "\r%zu Complete!\n", s->current_row);
+
+  if (raw_output) {
+    fb();
+  }
 }
 
 void field_end_fullmode(void *field, size_t len, void *data) {
