@@ -18,6 +18,7 @@ char raw_output = 0;
 char write_buffer[OBUF_SIZE] = {0};
 size_t write_buffer_len = 0;
 
+/* flush buffer */
 void fb() {
   char* p = write_buffer;
   while (write_buffer_len) {
@@ -31,16 +32,27 @@ void fb() {
   }
 }
 
-void ws(char* str, size_t len) {
+/* write string */
+void ws(char* str, size_t len, char raw) {
   if (!str || !len) return;
-  if (write_buffer_len + len >= OBUF_SIZE) {
-    fb();
-  }
 
-  memcpy(write_buffer + write_buffer_len, str, len);
-  write_buffer_len += len;
+  if (raw) {
+    if (write_buffer_len + len >= OBUF_SIZE) {
+      fb();
+    }
+    memcpy(write_buffer + write_buffer_len, str, len);
+    write_buffer_len += len;
+  } else {
+    size_t ql = csv_write(NULL, OBUF_SIZE - write_buffer_len, str, len);
+    if (write_buffer_len + ql >= OBUF_SIZE) {
+      fb();
+    }
+    csv_write(write_buffer + write_buffer_len, OBUF_SIZE - write_buffer_len, str, len);
+    write_buffer_len += ql;
+  }
 }
 
+/* write character */
 void wc(char c) {
   if (write_buffer_len + 1 >= OBUF_SIZE) {
     fb();
@@ -140,19 +152,10 @@ void field_end_easymode(void* field, size_t len, void* data) {
 
     /* Check to see if we're the first printed field... */
     if (s->skip_table[s->current_column].offset > 0) {
-      if (raw_output) {
-	ws(field_separator, field_separator_len);
-      } else {
-	fwrite(field_separator, sizeof(char), field_separator_len, stdout);
-      }
+      ws(field_separator, field_separator_len, 1);
     }
 
-    if (raw_output) {
-      ws(field, len);
-      /* fwrite(field, sizeof(char), len, stdout); */
-    } else {
-      csv_fwrite(stdout, field, len);
-    }
+    ws(field, len, raw_output);
   }
 }
 
@@ -160,11 +163,7 @@ void row_end_easymode(int c, void* data) {
   State* s = data;
   s->current_column = 0;
   s->current_row++;
-  if (raw_output) {
-    wc('\n');
-  } else {
-    fputc('\n', stdout);
-  }
+  wc('\n');
   if (show_progress && !(s->current_row%10000)) {
     fprintf(stderr, "\r%zu", s->current_row - (rand()%10000));
   }
@@ -180,9 +179,7 @@ void process_easymode(FILE* f, State* s, struct csv_parser* p) {
   csv_fini(p, field_end_easymode, row_end_easymode, s);
   if (show_progress) fprintf(stderr, "\r%zu Complete!\n", s->current_row);
 
-  if (raw_output) {
-    fb();
-  }
+  fb();
 }
 
 void field_end_fullmode(void *field, size_t len, void *data) {
@@ -197,14 +194,10 @@ void field_end_fullmode(void *field, size_t len, void *data) {
     size_t i = s->skip_table[s->current_column].offset;
     if (s->fields[i].quick) {
       if (i > 0) {
-	fwrite(field_separator, sizeof(char), field_separator_len, stdout);
+	ws(field_separator, field_separator_len, 1);
       }
 
-      if (raw_output) {
-	fwrite(field, sizeof(char), len, stdout);
-      } else {
-	csv_fwrite(stdout, field, len);
-      }
+      ws(field, len, raw_output);
 
       if (!s->fields[i].next_idx) {
 	/* Field isn't referenced again, so we don't need to save its
@@ -243,21 +236,17 @@ void row_end_fullmode(int c, void *data) {
     if (s->fields[i].quick) continue; /* Already been printed */
     
     if (i > 0) {
-      fwrite(field_separator, sizeof(char), field_separator_len, stdout);
+      ws(field_separator, field_separator_len, 1);
     }
     
-    if (raw_output) {
-      fwrite(s->fields[i].data, sizeof(char), s->fields[i].len, stdout);
-    } else {
-      csv_fwrite(stdout, s->fields[i].data, s->fields[i].len);
-    }
+    ws(s->fields[i].data, s->fields[i].len, raw_output);
 
     /* Clear these out, on the off-chance the next row doesn't have full data */
     s->fields[i].data = NULL;
     s->fields[i].len = 0;
   }
 
-  fputc('\n', stdout);
+  wc('\n');
 
   arreset(s->field_mem);
 
@@ -275,6 +264,7 @@ void process_fullmode(FILE* f, State* s, struct csv_parser* p) {
   }
   csv_fini(p, field_end_fullmode, row_end_fullmode, s);
   if (show_progress) fprintf(stderr, "\r%zu Complete!\n", s->current_row);
+  fb();
 }
 
 /* Extracts column definitions from str, puts them into the fields
