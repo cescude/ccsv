@@ -144,9 +144,9 @@ Outputting in "full" mode (column data must be saved to memory due to
 output columns being written out-of-order), how long does `csv` take
 to process the file?
 
-   $ time ./csv -f ~/Downloads/aggregated.csv -c708-1 -p > /dev/null
-   22756334 Complete!
+    $ time ./csv -f ~/Downloads/aggregated.csv -c708-1 -p > /dev/null
+    22756334 Complete!
 
-   real    3m44.462s
-   user    3m37.892s
-   sys     0m5.700s
+    real    3m44.462s
+    user    3m37.892s
+    sys     0m5.700s
